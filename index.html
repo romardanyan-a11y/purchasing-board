@@ -1,1 +1,41 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>План закупок</title></head><body style="font:16px/1.5 system-ui;padding:48px 16px;text-align:center"><h1>План закупок</h1><p>Страница готовится.</p></body></html>
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'">
+<title>План закупок</title>
+<link rel="preload" href="fonts/inter-cyrillic-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#view">К содержимому</a>
+<header class="band">
+  <div class="wrap band-in">
+    <div class="band-title">
+      <h1 class="title">План закупок</h1>
+      <span class="band-meta" id="band-date"></span>
+      <span class="band-meta" id="band-check"></span>
+    </div>
+    <div class="search" id="search"><label class="sr" for="sku-search">Найти SKU, заказ, поставщика или категорию</label>
+      <input id="sku-search" type="search" placeholder="SKU, заказ, категория" autocomplete="off" aria-controls="search-out">
+      <ul class="search-out" id="search-out" hidden></ul></div>
+    <nav class="tabs" aria-label="Разделы">
+      <a href="#orders" data-tab="orders">Заказы</a>
+      <a href="#calendar" data-tab="calendar">Календарь</a>
+      <a href="#risks" data-tab="risks">Риски</a>
+      <a href="#how" data-tab="how">Как считали</a>
+    </nav>
+  </div>
+</header>
+<div id="alert" class="alert" role="alert" hidden></div>
+<main id="view" class="wrap" tabindex="-1"><p class="muted loading">Загружаю расчёт.</p></main>
+<div id="scrim" class="scrim" hidden></div>
+<aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden></aside>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<noscript><p class="wrap">Для этой страницы нужен JavaScript.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>
