@@ -1,0 +1,139 @@
+# Runs in the public repository purchasing-board, where Actions is free; this file is the source, copied to its
+# .github/workflows/. The code and the raw export stay in the private repository: the job fetches them with a deploy key.
+# The logs are public, so the steps print only the outcome.
+name: daily
+
+on:
+  schedule:
+    # GitHub drops scheduled runs without warning, so there are three chances a day; a run on old data only notes the check.
+    - cron: '17 4,10,16 * * *'
+  workflow_dispatch:
+    inputs:
+      rewrite_digest:
+        description: 'Написать текст на день заново, например после добавления ключа'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: daily
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: romardanyan-a11y/purchasing-ai
+          ssh-key: ${{ secrets.CODE_DEPLOY_KEY }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      # The tests pin the numbers of the clean export. Without this the buyer's first fact in overrides/ would stop
+      # the tests and with them the publication, so they run on the headers alone and the facts come back after.
+      # A failure does not end the job: the calculation is skipped, but the page still goes out with the warning.
+      - name: Тесты
+        id: tests
+        continue-on-error: true
+        run: |
+          for file in overrides/*.csv; do
+            head -n 1 "$file" > "$file.tmp"
+            mv "$file.tmp" "$file"
+          done
+          set +e
+          python3 -m unittest discover -s tests > "$RUNNER_TEMP/tests.log" 2>&1
+          code=$?
+          tail -n 3 "$RUNNER_TEMP/tests.log"
+          set -e
+          git checkout -- overrides
+          exit $code
+
+      - name: Записать сбой тестов
+        if: steps.tests.outcome == 'failure'
+        run: |
+          python3 - "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
+          import sys
+          from engine import build
+          path = "runs/history.json"
+          history = build.read_history(path)
+          good = [entry for entry in history if entry["status"] == "ok"]
+          build._append(history, path, {"as_of": good[-1]["as_of"] if good else None, "status": "failed",
+                                        "checked_at": sys.argv[1], "hash": None, "hashes": None,
+                                        "error": "tests: автотесты не прошли, расчёт на этих данных не запускался"})
+          PY
+
+      # A failed run leaves the last good result and an entry in history.json. The page still goes out with that
+      # warning, and the last step fails the job so the failure is visible in Actions.
+      - name: Расчёт
+        id: calc
+        if: steps.tests.outcome == 'success'
+        continue-on-error: true
+        run: python3 run.py --checked-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      # No key means the template. An empty secret arrives as an empty string, and the module treats it as no key.
+      - name: Текст на день
+        id: digest
+        if: steps.tests.outcome == 'success'
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REWRITE_DIGEST: ${{ inputs.rewrite_digest }}
+        run: |
+          if [ "$REWRITE_DIGEST" = "true" ]; then
+            python3 -m engine.narrative --force
+          else
+            python3 -m engine.narrative
+          fi
+
+      - name: Сохранить результат
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A runs
+          if git diff --cached --quiet; then
+            echo 'runs/ не изменились'
+          else
+            git commit -q -m "Запуск ${GITHUB_RUN_NUMBER}: результаты"
+            git pull -q --rebase --autostash origin main
+            git push -q origin HEAD:main
+          fi
+
+      - name: Собрать страницу
+        run: python3 -m engine.site --out dist
+
+      - uses: actions/checkout@v4
+        with:
+          path: board
+
+      - name: Опубликовать
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$(git rev-parse --short HEAD)
+          find board -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
+          cp -R dist/. board/
+          cd board
+          git config user.name 'purchasing-ai'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'страница не изменилась'
+          else
+            git commit -q -m "Обновление страницы $code"
+            git push -q
+            # A push made with this token may not start the Pages build by itself.
+            gh api -X POST "repos/$GITHUB_REPOSITORY/pages/builds" --silent || true
+          fi
+
+      - name: Показать сбой
+        if: steps.tests.outcome == 'failure' || steps.calc.outcome == 'failure' || steps.digest.outcome == 'failure'
+        run: |
+          echo "Тесты: ${{ steps.tests.outcome }}, расчёт: ${{ steps.calc.outcome }}, текст: ${{ steps.digest.outcome }}. Подробности в runs/history.json и на странице."
+          exit 1
