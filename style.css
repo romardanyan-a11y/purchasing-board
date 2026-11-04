@@ -261,6 +261,7 @@ tr.selected td { background: var(--tint); }
 .steps b { font-weight: var(--fw-head); display: block; }
 .plain-list { list-style: disc; padding-left: 20px; max-width: 86ch; }
 .plain-list li + li { margin-top: 4px; }
+.cases-notes { margin-bottom: 16px; color: var(--ink-2); }
 .reading { max-width: 86ch; background: var(--lavender); border-radius: var(--radius-m); padding: 12px 16px; margin-bottom: 12px; }
 .reading p + p { margin-top: 6px; }
 .gloss { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; max-width: 86ch; margin: 0; }

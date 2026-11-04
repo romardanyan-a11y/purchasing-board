@@ -121,10 +121,10 @@ function trustHtml(s) {
 function riskLineHtml(s) {
   const r = (s.site || {}).risk_line || {};
   if (!isNum(r.deficit_skus) || !isNum(r.excess_skus)) return '';
-  const deficit = r.deficit_skus ? `дефицит ${num(r.deficit_skus)} SKU, потеряем ${units(r.deficit_units)}` : 'дефицита нет';
+  const deficit = r.deficit_skus ? `дефицит ${num(r.deficit_skus)} SKU, потеряем ${units(r.deficit_units)}, если новый заказ уйдёт в срок` : 'дефицита нет';
   const excess = r.excess_skus ? `избыток ${num(r.excess_skus)} SKU, лишних ${units(r.excess_units)}` : 'избытка нет';
-  const incoming = r.unproven_incoming_skus ? `; едет без доказанного спроса ${num(r.unproven_incoming_skus)} SKU` : '';
-  return `<p class="decide-note" id="risk-line">Под риском: ${esc(deficit)}; ${esc(excess)}${esc(incoming)}. <a href="#risks">Риски</a></p>`;
+  const incoming = r.unproven_incoming_skus ? `; едет без доказанного спроса <a href="#risks" data-jump="unproven-title">${esc(skuCount(r.unproven_incoming_skus))}</a>` : '';
+  return `<p class="decide-note" id="risk-line">Под риском: ${esc(deficit)}; ${esc(excess)}${incoming}. <a href="#risks">Риски</a></p>`;
 }
 function decisionHtml(s) {
   const h = s.headline || {};
@@ -190,6 +190,13 @@ function timelineHtml(t) {
 }
 
 /* ---- check first ---- */
+function poQuantityOpen(r, detail) {
+  return Boolean(detail.eta_fixed_by_buyer) && (r.confirmed_units || 0) < r.units;
+}
+function poSettled(r, s) {
+  const detail = ((s.site || {}).po_details || {})[r.po_id] || {};
+  return Boolean(detail.eta_fixed_by_buyer) && !poQuantityOpen(r, detail);
+}
 function poCard(r, s) {
   const cats = (r.categories || []).map(catName).join(', ');
   const supplier = (r.suppliers || []).join(', ');
@@ -198,14 +205,17 @@ function poCard(r, s) {
   const rows = detail.skus || [];
   const eta = (r.etas || [])[0];
   const fixed = detail.eta_fixed_by_buyer;
-  const title = fixed ? `срок закреплён закупщиком на ${date(eta)}` : lowerFirst(r.action);
   /* The buyer names a date, and the export still counts its own confirmed units: these are two different facts. */
-  const inErp = r.confirmed_units ? `в выгрузке подтверждено ${units(r.confirmed_units)}` : 'подтверждённого количества в выгрузке нет';
+  const quantityOpen = poQuantityOpen(r, detail);
+  const title = fixed ? `срок закреплён закупщиком на ${date(eta)}${quantityOpen ? ', сверьте количество' : ''}` : lowerFirst(r.action);
+  const inErp = r.confirmed_units
+    ? `в выгрузке подтверждено ${units(r.confirmed_units)}${quantityOpen ? ` из ${units(r.units)}: остальное осталось сверить с поставщиком` : ''}`
+    : `подтверждённого количества в выгрузке нет${quantityOpen ? ': его осталось сверить с поставщиком' : ''}`;
   /* A date before as_of takes the order out of the future arrivals, and a share above 100% would mean nothing. */
   const share = !fixed || r.share_of_future <= 1 ? `Это ${pct(r.share_of_future)} всех будущих приходов` : '';
   const standing = fixed
-    ? `${share ? `${share}. ` : ''}Срок назвал закупщик, ${inErp}.`
-    : `${share}, подтверждено ${units(r.confirmed_units)}.`;
+    ? `${share ? `${share}. ` : ''}Срок назвал закупщик, ${inErp}${r.confirmed_units && !quantityOpen ? '' : '.'}`
+    : `${share}, подтверждено ${units(r.confirmed_units)}`;
   const list = rows.length ? `<details class="po-skus"><summary>Какие ${esc(num(rows.length))} SKU в заказе и когда они закончатся</summary>${table([
     { h: 'SKU', cell: (l) => skuLink(l.sku_id) },
     { h: 'В этом заказе', num: true, cell: (l) => esc(units(l.qty)) },
@@ -215,7 +225,7 @@ function poCard(r, s) {
   ], rows)}</details>` : '';
   const late = fixed ? '' : `<div><b>${esc(units(r.lost_units_if_late))}</b>потеряем до этой же даты, если придёт только ${esc(date(r.eta_late_max))}</div>`;
   return `<div class="po-card">
-    <div class="po-title">${ICON_WARN}<div class="po-body">
+    <div class="po-title">${!fixed || quantityOpen ? ICON_WARN : ''}<div class="po-body">
       <h3>${esc(r.po_id)}: ${esc(title)}</h3>
       <p>${esc(units(r.units))} на ${esc(num(r.skus))} SKU, ${esc(cats)}, поставщик ${code(supplier)}. ${esc(standing)}${esc(newcomer)}</p>
       <div class="delay">
@@ -263,7 +273,9 @@ function moreChecksHtml(s) {
 function checkFirstHtml(s) {
   const rows = s.check_first || [];
   if (!rows.length) return '';
-  const pos = rows.filter((r) => r.kind === 'po_eta').map((r) => poCard(r, s)).join('');
+  const orders = rows.filter((r) => r.kind === 'po_eta');
+  const pos = orders.filter((r) => !poSettled(r, s)).map((r) => poCard(r, s)).join('');
+  const settled = orders.filter((r) => poSettled(r, s)).map((r) => poCard(r, s)).join('');
   const suppliers = rows.filter((r) => r.kind !== 'po_eta');
   const tbl = suppliers.length ? `<div class="panel">${table([
     { h: 'Поставщик', cell: (r) => code(r.supplier_id) },
@@ -271,7 +283,7 @@ function checkFirstHtml(s) {
     { h: 'Почему', prose: true, cell: (r) => esc(supplierWhy(r)) },
     { h: 'Заказ сегодня', num: true, cell: (r) => esc(units(r.order_now_units)) },
   ], suppliers.slice().sort(byDesc('order_now_units')))}</div>` : '';
-  return `<section class="section section-near" aria-labelledby="check-title"><h2 id="check-title">Сначала проверьте</h2>${pos}${tbl}${moreChecksHtml(s)}</section>`;
+  return `<section class="section section-near" aria-labelledby="check-title"><h2 id="check-title">Сначала проверьте</h2>${pos}${tbl}${moreChecksHtml(s)}${settled ? `<h3>Срок и количество подтверждены, проверять нечего</h3>${settled}` : ''}</section>`;
 }
 
 /* ---- drafts ---- */
@@ -651,8 +663,12 @@ function unprovenTable(rows, limit) {
 function unprovenSection(s) {
   const rows = (s.risk_rows || {}).unproven_excess || [];
   if (!rows.length) return '';
-  return `<h3>Запаса и заказов больше, чем продаётся <span class="count">${esc(skuCount(rows.length))}</span></h3>
-    <p class="lede">Запас и заказы в пути больше спроса на год, но избыток не доказан: на полке пусто или истории мало. Сначала выясните, зачем это едет.</p>
+  const incoming = rows.filter((r) => r.in_transit > 0);
+  const rest = rows.length - incoming.length;
+  const onWay = incoming.length ? `Едут ${skuCount(incoming.length)}: ${incoming.map((r) => r.sku_id).join(', ')}. Сначала выясните, зачем это едет.` : '';
+  const shelf = !rest ? '' : incoming.length ? `У остальных ${skuCount(rest)} заказов в пути нет, это запас на складе.` : 'Заказов в пути по ним нет, это запас на складе.';
+  return `<h3 id="unproven-title">Запаса и заказов больше, чем продаётся <span class="count">${esc(skuCount(rows.length))}</span></h3>
+    <p class="lede">Запас и заказы в пути больше спроса на год, но избыток не доказан: на полке пусто или истории мало. ${esc([onWay, shelf].filter(Boolean).join(' '))}</p>
     <div class="panel">${unprovenTable(rows, 10)}</div>`;
 }
 function risksHtml() {
@@ -768,10 +784,31 @@ function risksHtml() {
 }
 
 /* ---- how ---- */
-const minusText = (text) => String(text).replace(/(^|[\s(])-(?=\d)/g, `$1${MINUS}`);
-function caseHappened(c) {
+function caseHappened(c, s) {
   const a = c.actual, m = c.system;
-  return `С ${date(m.arrival)} по ${date(a.scored_until)} продано ${units(a.sold_arrival_to_end)}. Товара не было ${num(a.cover_months_out)} из ${num(a.cover_months)} мес. этого периода. С ${date(m.as_of)} пришло ${units(a.receipts_from_cut_to_end)}, на ${date(a.scored_until)} на складе ${units(a.stock_at_end)}.`;
+  const sold = `С расчётной даты прихода метода, ${date(m.arrival)}, по ${date(a.scored_until)} продано ${units(a.sold_arrival_to_end)} Товара не было ${num(a.cover_months_out)} из ${num(a.cover_months)} мес. этого периода.`;
+  const stock = `С ${date(m.as_of)} пришло ${units(a.receipts_from_cut_to_end)}, на ${date(a.scored_until)} на складе ${units(a.stock_at_end)}`;
+  if (a.order_lines) return `${sold} ${stock}`;
+  const window_ = ((s.site || {}).hindsight_order_window_days);
+  const noOrders = a.receipts_from_cut_to_end
+    ? `За ${num(window_)} дней после этой даты строк заказа в выгрузке нет, а товар пришёл, поэтому решения закупщика здесь не видно.`
+    : `За ${num(window_)} дней после этой даты строк заказа в выгрузке нет.`;
+  const flagged = (s.check_first || []).find((r) => r.supplier_id === m.supplier_id && r.reason === 'receipts_without_po');
+  const supplier = a.receipts_from_cut_to_end && flagged ? ` Поставщик ${m.supplier_id} в списке «Сначала проверьте»: в выгрузке нет заказов на его приходы.` : '';
+  return `${sold} ${stock} ${noOrders}${supplier}`;
+}
+function caseVerdict(c) {
+  const a = c.actual, m = c.system, state_ = (c.compare || {}).state;
+  if (state_ === 'no_stock') {
+    return `Сравнить нельзя: товара не было ${num(a.cover_months_out)} из ${num(a.cover_months)} мес. этого периода. Это либо потерянный спрос, либо SKU сняли и заменили, а карты замен нет. Такую строку закупщик должен подтвердить до заказа.`;
+  }
+  if (state_ === 'too_early') return `Сравнивать рано: прогноз считан до ${date(m.cover_end)}, а продажи известны до ${date(a.scored_until)}.`;
+  if (state_ === 'no_sales') return 'Продаж за этот период нет.';
+  if (state_ !== 'compared') return c.verdict || NONE;
+  const gap = c.compare.gap_pct;
+  const side = gap < 0 ? 'ниже' : 'выше';
+  const later = m.arrivals_in_cover ? `, минус приходы в этом периоде ${units(m.arrivals_in_cover)}` : '';
+  return `Прогноз на этот период ${units(m.demand_in_cover)}, продано ${units(a.sold_arrival_to_end)}: прогноз ${side} продаж на ${pctPlain(Math.abs(gap))}. Заказ метода ${units(m.order_qty)}: прогноз, плюс страховка ${units(m.safety)}, минус запас на дату прихода ${units(m.stock_at_arrival)}${later}`;
 }
 function casesHtml(s) {
   const cases = (s.accuracy || {}).decision_cases || [];
@@ -780,12 +817,16 @@ function casesHtml(s) {
   const rows = cases.map((c) => (c.sku_id ? c : { ...c, verdict: 'В этой категории на эту дату не нашлось SKU с продажами.' }));
   return `<h3 id="cases-title">Что метод заказал бы в прошлом: реконструкция по дате заказа</h3>
     <p class="lede">Настоящих запусков в эти дни не было, снимков заказов в учётной системе тоже нет. Расчёт повторён на прошлую дату: всё, что случилось позже, убрано. Заказ закупщика взят по дате заказа в выгрузке, за ${esc(num(window_))} дней после этой даты. Заказ метода посчитан упрощённо, только для этих примеров. Дата и категория заданы в настройках, SKU выбран без знания будущего: самый продаваемый в категории на эту дату. Показаны все примеры, в том числе не в пользу метода.</p>
+    <ul class="plain-list cases-notes">
+      <li>Дата прихода метода расчётная: прошлая дата плюс срок поставки, известный в тот день. Это не настоящая поставка. На ранних датах срок занижен, потому что долгие поставки ещё не успели прийти, и настоящий приход мог быть намного позже.</li>
+      <li>«Нет строк заказа» значит только, что в выгрузке их нет. Считать это решением закупщика не заказывать нельзя: в выгрузке есть приходы без заказов.</li>
+    </ul>
     <div class="panel">${table([
     { h: 'Дата и SKU', cell: (c) => `${esc(date((c.system || {}).as_of || `${c.cut}-01`))}<br>${c.sku_id ? skuLink(c.sku_id) : ''}${c.category_name ? `<br><span class="muted">${esc(c.category_name)}</span>` : ''}` },
-    { h: 'Метод заказал бы', num: true, cell: (c) => (c.system ? esc(units(c.system.order_qty)) : DASH) },
-    { h: 'Закупщик заказал', num: true, cell: (c) => (c.actual ? esc(units(c.actual.orders_placed_units)) : DASH) },
-    { h: 'Что было на деле', prose: true, cell: (c) => (c.actual ? esc(caseHappened(c)) : DASH) },
-    { h: 'Вывод расчёта', prose: true, cell: (c) => esc(minusText(c.verdict || NONE)) },
+    { h: 'Метод заказал бы', num: true, cell: (c) => (c.system ? `${esc(units(c.system.order_qty))}<br><span class="muted">срок ${esc(days(c.system.lead_p50_days))} на ту дату</span>` : DASH) },
+    { h: 'Заказ закупщика в выгрузке', num: true, cell: (c) => (!c.actual ? DASH : c.actual.order_lines ? esc(units(c.actual.orders_placed_units)) : 'нет строк заказа') },
+    { h: 'Что было на деле', prose: true, cell: (c) => (c.actual ? esc(caseHappened(c, s)) : DASH) },
+    { h: 'Вывод расчёта', prose: true, cell: (c) => esc(caseVerdict(c)) },
   ], rows)}</div>`;
 }
 function accuracyHtml(s) {
@@ -918,7 +959,7 @@ function howHtml() {
       <p class="lede">В письме импортёр из Китая, в описании данных дистрибьютор в Румынии с поставками из Азии. На формулы это не влияет: страна входит только через срок поставки, а срок берётся из фактических отгрузок.</p></section>
     <section class="section"><h2>Журнал решений закупщика</h2>
       <p class="lede">Решения закупщика записываются в журнал и учитываются в следующем запуске: подтверждённый срок, снятый SKU, проверенный поставщик.</p>
-      <ul class="plain-list"><li>Учтено решений: ${esc(num(j.decisions))}.</li><li>Замен SKU: ${esc(num(j.successors))}.</li><li>Проверенных поставщиков: ${esc(num((j.suppliers_verified || []).length))}.</li>${warnings}</ul></section>
+      <ul class="plain-list"><li>Решений по SKU: ${esc(num(j.decisions))}.</li><li>Замен SKU: ${esc(num(j.successors))}.</li><li>Проверенных поставщиков: ${esc(num((j.suppliers_verified || []).length))}.</li><li>Правок по заказам в пути: ${esc(num(model.order_facts))}.</li><li>Сроков поставщика, заданных вручную: ${esc(num(model.lead_facts))}.</li>${warnings}</ul></section>
     <section class="section"><h2>Вопросы к вам</h2>
       <ul class="plain-list">${(site.questions || []).map((q) => `<li>${esc(q)}</li>`).join('')}</ul></section>
     <section class="section"><h2>Словарь</h2>
