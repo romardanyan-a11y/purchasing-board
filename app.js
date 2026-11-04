@@ -101,7 +101,7 @@ function digestHtml(s) {
   const d = s.digest;
   if (!d || !Array.isArray(d.paragraphs) || !d.paragraphs.length) return '';
   const mark = d.source === 'model'
-    ? `Текст написала модель, с расчётом сверено чисел: ${num(d.numbers_checked)}.`
+    ? `Текст написала модель, с расчётом сверено значений: ${num(d.numbers_checked)}.`
     : 'Текст собран по шаблону из расчёта.';
   return `<details class="digest"><summary>Текст на день. ${esc(mark)}</summary>${d.paragraphs.map((p) => `<p>${esc(p)}</p>`).join('')}</details>`;
 }
